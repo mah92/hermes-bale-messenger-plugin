@@ -2,7 +2,7 @@
 name: hermes-bale-bot-skill
 description: "Use when adding Bale (بله) support to Hermes Gateway. Connect AI agent to Persian messenger via free Bot API."
 version: 1.1.0
-author: Ali Sani
+author: علی محمودی
 license: MIT
 metadata:
   hermes:

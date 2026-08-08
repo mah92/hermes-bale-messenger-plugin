@@ -8,7 +8,7 @@ description: |
   Create a bot with @BotFather in the Bale app, get a token, and connect.
 
   Bale (بله) is a Persian messaging platform by Bank Melli Iran.
-author: Hermes + Ali (mah92)
+author: علی محمودی (mah92)
 requires_env:
   - name: BALE_BOT_TOKEN
     description: "Bot token from @BotFather in Bale app (e.g. 123456:ABC...xyz)"
