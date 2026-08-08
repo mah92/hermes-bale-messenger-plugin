@@ -475,18 +475,39 @@ class BaleAdapter(BasePlatformAdapter):
         if caption:
             payload["caption"] = caption
 
+        # 1) Try direct URL — Bale fetches the image server-side
         try:
-            result = await self._api_post_multipart("sendDocument", data, files)
+            result = await self._api_post("sendPhoto", payload)
             if result.get("ok"):
                 sent_msg_id = str(result.get("result", {}).get("message_id", ""))
-                return SendResult(
-                    success=True,
-                    message_id=sent_msg_id,
-                )
+                return SendResult(success=True, message_id=sent_msg_id)
         except Exception:
             pass
 
-        # Fallback: send as text
+        # 2) Download and upload as multipart (for URLs Bale can't reach)
+        try:
+            import tempfile
+            async with self._http.get(image_url) as resp:
+                if resp.status == 200:
+                    img_data = await resp.read()
+                    fd, tmp = tempfile.mkstemp(suffix=".jpg")
+                    os.close(fd)
+                    with open(tmp, "wb") as f:
+                        f.write(img_data)
+
+                    mp_data = {"chat_id": chat_id}
+                    if caption:
+                        mp_data["caption"] = caption
+                    result = await self._api_post_multipart("sendPhoto",
+                        mp_data, {"photo": tmp})
+                    os.unlink(tmp)
+                    if result.get("ok"):
+                        sent_msg_id = str(result.get("result", {}).get("message_id", ""))
+                        return SendResult(success=True, message_id=sent_msg_id)
+        except Exception:
+            pass
+
+        # 3) Fallback: send as text with URL
         text = caption or ""
         if image_url:
             text = f"{text}\n{image_url}".strip()
@@ -620,7 +641,7 @@ class BaleAdapter(BasePlatformAdapter):
         files = {"photo": file_path}
 
         try:
-            result = await self._api_post_multipart("sendDocument", data, files)
+            result = await self._api_post_multipart("sendPhoto", data, files)
             if result.get("ok"):
                 sent_msg_id = str(result.get("result", {}).get("message_id", ""))
                 return SendResult(

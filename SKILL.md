@@ -1,12 +1,13 @@
 ---
 name: hermes-bale-bot-skill
-description: "Hermes Bale adapter: connect AI agent to Persian messenger via bot API. Use when adding Bale support to Hermes Gateway."
-version: 1.0.0
+description: "Use when adding Bale (بله) support to Hermes Gateway. Connect AI agent to Persian messenger via free Bot API."
+version: 1.1.0
 author: Ali Sani
 license: MIT
 metadata:
   hermes:
     tags: [bale, persian, messenger, platform, adapter, bot]
+    related_skills: [hermes-platform-adapter, bale-hermes-connection]
 ---
 
 # Bale Platform Adapter for Hermes
@@ -19,8 +20,8 @@ through Bale via the Bot API.
 
 ```bash
 cd ~/.hermes/plugins/platforms/
-git clone https://github.com/YOUR_USER/hermes-bale-bot-skill.git bale
-hermes plugins enable bale-platform
+git clone git@github.com:mah92/hermes-bale-messenger-plugin.git bale
+hermes plugins enable hermes-bale-messenger
 ```
 
 Then add your bot token to `~/.hermes/.env`:
@@ -43,10 +44,11 @@ Restart the gateway and you're done.
 ## Features
 
 - Text messages (send & receive)
-- Voice messages (OGG via TTS provider)
-- Images & documents
+- Voice messages — send via TTS, receive voice/audio as downloadable files
+- Images — send by URL (with download fallback) or local file upload
+- Documents — upload and send
 - Typing indicators (`sendChatAction`)
-- Group chat support
+- Group chat support with optional @mention gate
 - User/chat allowlisting
 - Cron delivery support
 
@@ -72,14 +74,10 @@ No gRPC, no user account — just HTTP calls to `tapi.bale.ai`.
 Bale Server ←→ HTTP Long Poll ←→ Hermes Gateway ←→ AI Agent
 ```
 
-## Two-Bot Setup
-
-For dual-bot setups (e.g., @ali_sani_bot + @ali_saleth_bot), copy this
-adapter and change `BALE_` prefix to `BALE2_`. No other code changes needed.
-
 ## Common Pitfalls
 
 1. **Bot blocked by user:** User must `/start` the bot before it can DM them.
 2. **Bot-to-bot blocked:** Bale (like Telegram) blocks bots from seeing each other's messages, even in groups. Use a user account bridge for bot-to-bot.
 3. **Group privacy:** The bot must be an admin to see all group messages, otherwise it only sees `/command` and replies.
-4. **Cache after edits:** Always `find ~/.hermes/plugins/platforms/bale -name __pycache__ -exec rm -rf {} +` after editing adapter files.
+4. **Voice messages arrive empty?** Transcription needs an STT provider. Install `bale-messenger-bot-stt-skill` for Persian STT, or set `stt.provider` in `~/.hermes/config.yaml`.
+5. **Cache after edits:** Always `find ~/.hermes/plugins/platforms/bale -name __pycache__ -exec rm -rf {} +` after editing adapter files.

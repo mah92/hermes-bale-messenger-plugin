@@ -1,4 +1,4 @@
-name: hermes-bale-bot-skill
+name: hermes-bale-messenger
 label: Bale
 kind: platform
 version: 1.1.0
@@ -22,6 +22,14 @@ optional_env:
   - name: BALE_WEBHOOK_URL
     description: "Webhook URL for receiving updates (instead of polling). Leave empty for polling mode."
     prompt: "Webhook URL (or empty for polling)"
+    password: false
+  - name: BALE_ALLOWED_CHATS
+    description: "Comma-separated chat IDs the bot is allowed to interact with"
+    prompt: "Allowed chat IDs (comma-separated, or empty for all)"
+    password: false
+  - name: BALE_REQUIRE_MENTION
+    description: "Set to 'true' to require @mention in groups (bot must be admin)"
+    prompt: "Require @mention in groups? (true/false)"
     password: false
   - name: BALE_ALLOWED_USERS
     description: "Comma-separated user IDs allowed to interact with the bot"
