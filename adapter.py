@@ -164,6 +164,16 @@ class BaleAdapter(BasePlatformAdapter):
         self._require_mention = str(_rm).strip().lower() in ("true", "1", "yes", "on")
         self._pending_context: dict[str, list[tuple[str, str]]] = {}  # chat_id -> [(user_name, text)]
 
+        # Skip voice/audio transcription for clips longer than this (seconds).
+        # Default 30s. Set BALE_MAX_VOICE_DURATION=0 to disable limit entirely.
+        _max_dur = extra.get("max_voice_duration")
+        if _max_dur is None:
+            _max_dur = _get_env("BALE_MAX_VOICE_DURATION")
+        try:
+            self._max_voice_duration: int = int(_max_dur) if _max_dur and _max_dur.strip() else 30
+        except (ValueError, TypeError):
+            self._max_voice_duration = 30
+
     # ------------------------------------------------------------------
     # connect / disconnect
     # ------------------------------------------------------------------
@@ -348,20 +358,28 @@ class BaleAdapter(BasePlatformAdapter):
                     media_types.append("video")
         elif msg.get("audio"):
             mt = MessageType.AUDIO
-            file_id = msg["audio"].get("file_id", "")
-            if file_id:
-                local = await self._download_media(file_id)
-                if local:
-                    media_urls.append(local)
-                    media_types.append("audio")
+            duration = msg["audio"].get("duration", 0)
+            if self._max_voice_duration > 0 and duration > self._max_voice_duration:
+                logger.info("[bale] Skipping audio — duration %ds > max %ds", duration, self._max_voice_duration)
+            else:
+                file_id = msg["audio"].get("file_id", "")
+                if file_id:
+                    local = await self._download_media(file_id)
+                    if local:
+                        media_urls.append(local)
+                        media_types.append("audio")
         elif msg.get("voice"):
             mt = MessageType.VOICE
-            file_id = msg["voice"].get("file_id", "")
-            if file_id:
-                local = await self._download_media(file_id)
-                if local:
-                    media_urls.append(local)
-                    media_types.append("audio")
+            duration = msg["voice"].get("duration", 0)
+            if self._max_voice_duration > 0 and duration > self._max_voice_duration:
+                logger.info("[bale] Skipping voice — duration %ds > max %ds", duration, self._max_voice_duration)
+            else:
+                file_id = msg["voice"].get("file_id", "")
+                if file_id:
+                    local = await self._download_media(file_id)
+                    if local:
+                        media_urls.append(local)
+                        media_types.append("audio")
         elif msg.get("document"):
             mt = MessageType.DOCUMENT
             file_id = msg["document"].get("file_id", "")

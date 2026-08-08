@@ -64,6 +64,7 @@ All via `~/.hermes/.env`:
 | `BALE_ALLOW_ALL_USERS` | — | false | Set "true" for open access |
 | `BALE_HOME_CHANNEL` | — | — | Default chat for cron delivery |
 | `BALE_REQUIRE_MENTION` | — | false | Require @mention in groups |
+| `BALE_MAX_VOICE_DURATION` | — | 30 | Max voice/audio duration (seconds) for STT. 0 = no limit |
 
 ## How It Works
 

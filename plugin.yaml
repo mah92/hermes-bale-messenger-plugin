@@ -31,6 +31,10 @@ optional_env:
     description: "Set to 'true' to require @mention in groups (bot must be admin)"
     prompt: "Require @mention in groups? (true/false)"
     password: false
+  - name: BALE_MAX_VOICE_DURATION
+    description: "Max voice/audio duration in seconds for STT (default 30, 0=unlimited)"
+    prompt: "Max voice duration in seconds (default 30)"
+    password: false
   - name: BALE_ALLOWED_USERS
     description: "Comma-separated user IDs allowed to interact with the bot"
     prompt: "Allowed user IDs (comma-separated)"
