@@ -7,7 +7,7 @@ license: MIT
 metadata:
   hermes:
     tags: [bale, persian, messenger, platform, adapter, bot]
-    related_skills: [hermes-platform-adapter, bale-hermes-connection]
+    related_skills: [hermes-bale-stt, bale-hermes-connection]
 ---
 
 # Bale Platform Adapter for Hermes
