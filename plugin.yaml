@@ -1,0 +1,33 @@
+name: hermes-bale-bot-skill
+label: Bale
+kind: platform
+version: 1.1.0
+description: |
+  Bale.ai messenger platform adapter for Hermes Agent (رایگان - Free).
+  Uses the free Bale Bot API via python-bale-bot library.
+  Create a bot with @BotFather in the Bale app, get a token, and connect.
+
+  Bale (بله) is a Persian messaging platform by Bank Melli Iran.
+author: Hermes + Ali (mah92)
+requires_env:
+  - name: BALE_BOT_TOKEN
+    description: "Bot token from @BotFather in Bale app (e.g. 123456:ABC...xyz)"
+    prompt: "Bot token from @BotFather"
+    password: true
+optional_env:
+  - name: BALE_HOME_CHANNEL
+    description: "Default chat ID for cron/notification delivery"
+    prompt: "Home chat ID (or empty)"
+    password: false
+  - name: BALE_WEBHOOK_URL
+    description: "Webhook URL for receiving updates (instead of polling). Leave empty for polling mode."
+    prompt: "Webhook URL (or empty for polling)"
+    password: false
+  - name: BALE_ALLOWED_USERS
+    description: "Comma-separated user IDs allowed to interact with the bot"
+    prompt: "Allowed user IDs (comma-separated)"
+    password: false
+  - name: BALE_ALLOW_ALL_USERS
+    description: "Set to 'true' to allow all users"
+    prompt: "Allow all users? (true/false)"
+    password: false
