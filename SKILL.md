@@ -20,7 +20,7 @@ through Bale via the Bot API.
 
 ```bash
 cd ~/.hermes/plugins/platforms/
-git clone git@github.com:mah92/hermes-bale-messenger-plugin.git bale
+git clone https://github.com/mah92/hermes-bale-messenger-plugin.git bale
 hermes plugins enable hermes-bale-messenger
 ```
 
