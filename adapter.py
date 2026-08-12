@@ -673,6 +673,62 @@ class BaleAdapter(BasePlatformAdapter):
         except Exception as exc:
             return SendResult(success=False, error=str(exc))
 
+    async def send_voice(
+        self,
+        chat_id: str,
+        audio_path: str,
+        caption: Optional[str] = None,
+        reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> SendResult:
+        """Send audio as a native voice message via Bale sendVoice API.
+
+        Bale does not support MEDIA: tags for voice delivery.
+        This method uploads the file directly via multipart/form-data.
+        Retries up to 3 times on failure.
+        """
+        if not self._http:
+            return SendResult(success=False, error="Not connected")
+        if not os.path.isfile(audio_path):
+            return SendResult(success=False, error=f"File not found: {audio_path}")
+
+        data = {"chat_id": chat_id}
+        if caption:
+            data["caption"] = caption
+        if reply_to:
+            data["reply_to_message_id"] = reply_to
+
+        last_error = ""
+        for attempt in range(3):
+            if attempt > 0:
+                await asyncio.sleep(1)
+            try:
+                result = await self._api_post_multipart("sendVoice", data, {"voice": audio_path})
+                if result.get("ok"):
+                    sent_msg_id = str(result.get("result", {}).get("message_id", ""))
+                    return SendResult(success=True, message_id=sent_msg_id)
+                last_error = str(result.get("description", "unknown error"))
+            except Exception as exc:
+                last_error = str(exc)
+
+        logger.warning("[bale] sendVoice failed after 3 attempts: %s", last_error)
+        return SendResult(success=False, error=last_error)
+
+    async def send_audio(
+        self,
+        chat_id: str,
+        audio_path: str,
+        caption: Optional[str] = None,
+        reply_to: Optional[str] = None,
+        **kwargs,
+    ) -> SendResult:
+        """Send audio file — same as send_voice for Bale."""
+        return await self.send_voice(
+            chat_id=chat_id, audio_path=audio_path,
+            caption=caption, reply_to=reply_to, **kwargs,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Standalone sender
