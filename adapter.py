@@ -42,6 +42,56 @@ def _api_url(token: str, method: str) -> str:
     return f"{API_BASE}/bot{token}/{method}"
 
 
+def _looks_like_timeout(error: str) -> bool:
+    """True when the error string suggests a request timeout.
+
+    Timeout means the delivery state is unknown (the server may have
+    processed the request), so automatic retries risk duplicate sends.
+    """
+    err = (error or "").lower()
+    return any(
+        marker in err
+        for marker in (
+            "timeout",
+            "timed out",
+            "timedout",
+            "request timed",
+            "deadline exceeded",
+            "asyncio.timeouterror",
+            "socket.timeout",
+        )
+    )
+
+
+def _guess_mime(path: str, fallback: str) -> str:
+    """Guess a proper MIME type for a downloaded file.
+
+    run.py classifies attachments via startswith("audio/") / startswith("image/")
+    / startswith("video/"). Bare tokens like "audio" or "image" (no trailing
+    slash) break that matching and cause the same file to be rendered twice
+    (once as its real type, once as a generic document).
+    """
+    import mimetypes
+
+    guessed, _ = mimetypes.guess_type(path)
+    if guessed:
+        return guessed
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".ogg":
+        return "audio/ogg"
+    if ext == ".opus":
+        return "audio/ogg"
+    if ext in (".mp3", ".wav", ".m4a", ".aac", ".flac"):
+        return "audio/mpeg" if ext == ".mp3" else "audio/ogg"
+    if ext in (".jpg", ".jpeg"):
+        return "image/jpeg"
+    if ext == ".png":
+        return "image/png"
+    if ext in (".mp4", ".mov", ".webm"):
+        return "video/mp4" if ext == ".mp4" else f"video/{ext[1:]}"
+    return fallback
+
+
 # ---------------------------------------------------------------------------
 # Requirement checks
 # ---------------------------------------------------------------------------
@@ -347,7 +397,7 @@ class BaleAdapter(BasePlatformAdapter):
                     local = await self._download_media(file_id)
                     if local:
                         media_urls.append(local)
-                        media_types.append("image")
+                        media_types.append(_guess_mime(local, "image/jpeg"))
         elif msg.get("video"):
             mt = MessageType.VIDEO
             file_id = msg["video"].get("file_id", "")
@@ -355,9 +405,15 @@ class BaleAdapter(BasePlatformAdapter):
                 local = await self._download_media(file_id)
                 if local:
                     media_urls.append(local)
-                    media_types.append("video")
+                    media_types.append(_guess_mime(local, "video/mp4"))
         elif msg.get("audio"):
-            mt = MessageType.AUDIO
+            # Bale sometimes delivers spoken voice notes under `audio` with an
+            # Ogg/Opus MIME (behaves like Telegram's `voice`). Classify those
+            # as VOICE so STT + auto-TTS dedup apply; keep real audio files
+            # (mp3/m4a) as AUDIO.
+            _a_mime = str(msg["audio"].get("mime_type") or "").lower()
+            _voice_like = ("ogg" in _a_mime) or ("opus" in _a_mime)
+            mt = MessageType.VOICE if _voice_like else MessageType.AUDIO
             duration = msg["audio"].get("duration", 0)
             if self._max_voice_duration > 0 and duration > self._max_voice_duration:
                 logger.info("[bale] Skipping audio — duration %ds > max %ds", duration, self._max_voice_duration)
@@ -367,7 +423,11 @@ class BaleAdapter(BasePlatformAdapter):
                     local = await self._download_media(file_id)
                     if local:
                         media_urls.append(local)
-                        media_types.append("audio")
+                        # Full MIME, not bare "audio" — run.py classifies
+                        # attachments via startswith("audio/") and a bare
+                        # "audio" breaks it, rendering the file twice
+                        # (once as audio, once as generic document).
+                        media_types.append(_a_mime or ("audio/ogg" if _voice_like else "audio/mpeg"))
         elif msg.get("voice"):
             mt = MessageType.VOICE
             duration = msg["voice"].get("duration", 0)
@@ -379,7 +439,10 @@ class BaleAdapter(BasePlatformAdapter):
                     local = await self._download_media(file_id)
                     if local:
                         media_urls.append(local)
-                        media_types.append("audio")
+                        # Full MIME (see note above).
+                        media_types.append(
+                            str(msg["voice"].get("mime_type") or "audio/ogg").lower()
+                        )
         elif msg.get("document"):
             mt = MessageType.DOCUMENT
             file_id = msg["document"].get("file_id", "")
@@ -387,7 +450,9 @@ class BaleAdapter(BasePlatformAdapter):
                 local = await self._download_media(file_id)
                 if local:
                     media_urls.append(local)
-                    media_types.append("document")
+                    media_types.append(
+                        str(msg["document"].get("mime_type") or "application/octet-stream").lower()
+                    )
         elif msg.get("location"):
             mt = MessageType.LOCATION
 
@@ -702,6 +767,16 @@ class BaleAdapter(BasePlatformAdapter):
         last_error = ""
         for attempt in range(3):
             if attempt > 0:
+                # Timeout errors are NOT safe to retry: the first call may
+                # have delivered the voice message already, and a retry would
+                # send it twice to the user. Mirrors the timeout policy in
+                # BasePlatformAdapter._send_with_retry.
+                if last_error and _looks_like_timeout(last_error):
+                    logger.warning(
+                        "[bale] sendVoice attempt %d timed out — delivery state unknown, not retrying to avoid duplicates",
+                        attempt + 1,
+                    )
+                    break
                 await asyncio.sleep(1)
             try:
                 result = await self._api_post_multipart("sendVoice", data, {"voice": audio_path})
