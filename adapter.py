@@ -549,7 +549,9 @@ class BaleAdapter(BasePlatformAdapter):
         chat_id: str,
         image_url: str,
         caption: Optional[str] = None,
-        metadata=None,
+        reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs,
     ) -> SendResult:
         if not self._http:
             return SendResult(success=False, error="Not connected")
@@ -557,6 +559,8 @@ class BaleAdapter(BasePlatformAdapter):
         payload: Dict[str, Any] = {"chat_id": chat_id, "photo": image_url}
         if caption:
             payload["caption"] = caption
+        if reply_to:
+            payload["reply_to_message_id"] = reply_to
 
         # 1) Try direct URL — Bale fetches the image server-side
         try:
@@ -679,6 +683,10 @@ class BaleAdapter(BasePlatformAdapter):
         chat_id: str,
         file_path: str,
         caption: Optional[str] = None,
+        file_name: Optional[str] = None,
+        reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs,
     ) -> SendResult:
         """Upload and send a document/file to a Bale chat."""
         if not self._http:
@@ -689,6 +697,8 @@ class BaleAdapter(BasePlatformAdapter):
         data = {"chat_id": chat_id}
         if caption:
             data["caption"] = caption
+        if reply_to:
+            data["reply_to_message_id"] = reply_to
         files = {"document": file_path}
 
         try:
@@ -711,6 +721,9 @@ class BaleAdapter(BasePlatformAdapter):
         chat_id: str,
         file_path: str,
         caption: Optional[str] = None,
+        reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs,
     ) -> SendResult:
         """Upload and send a photo/image to a Bale chat."""
         if not self._http:
@@ -721,6 +734,8 @@ class BaleAdapter(BasePlatformAdapter):
         data = {"chat_id": chat_id}
         if caption:
             data["caption"] = caption
+        if reply_to:
+            data["reply_to_message_id"] = reply_to
         files = {"photo": file_path}
 
         try:
@@ -796,12 +811,13 @@ class BaleAdapter(BasePlatformAdapter):
         audio_path: str,
         caption: Optional[str] = None,
         reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> SendResult:
         """Send audio file — same as send_voice for Bale."""
         return await self.send_voice(
             chat_id=chat_id, audio_path=audio_path,
-            caption=caption, reply_to=reply_to, **kwargs,
+            caption=caption, reply_to=reply_to, metadata=metadata, **kwargs,
         )
 
 
