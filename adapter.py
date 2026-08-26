@@ -753,6 +753,58 @@ class BaleAdapter(BasePlatformAdapter):
         except Exception as exc:
             return SendResult(success=False, error=str(exc))
 
+    async def send_image_file(
+        self,
+        chat_id: str,
+        image_path: str,
+        caption: Optional[str] = None,
+        reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> SendResult:
+        """Send a LOCAL image file via Bale sendPhoto (native upload)."""
+        return await self.send_photo(
+            chat_id=chat_id, file_path=image_path,
+            caption=caption, reply_to=reply_to, metadata=metadata, **kwargs,
+        )
+
+    async def send_video(
+        self,
+        chat_id: str,
+        video_path: str,
+        caption: Optional[str] = None,
+        reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> SendResult:
+        """Upload and send a video via Bale sendVideo API."""
+        if not self._http:
+            return SendResult(success=False, error="Not connected")
+        if not os.path.isfile(video_path):
+            return SendResult(success=False, error=f"File not found: {video_path}")
+
+        data = {"chat_id": chat_id}
+        if caption:
+            data["caption"] = caption
+        if reply_to:
+            data["reply_to_message_id"] = reply_to
+        files = {"video": video_path}
+
+        try:
+            result = await self._api_post_multipart("sendVideo", data, files)
+            if result.get("ok"):
+                sent_msg_id = str(result.get("result", {}).get("message_id", ""))
+                return SendResult(
+                    success=True,
+                    message_id=sent_msg_id,
+                )
+            return SendResult(
+                success=False,
+                error=str(result.get("description", "unknown error")),
+            )
+        except Exception as exc:
+            return SendResult(success=False, error=str(exc))
+
     async def send_voice(
         self,
         chat_id: str,
