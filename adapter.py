@@ -503,7 +503,76 @@ class BaleAdapter(BasePlatformAdapter):
         await self.handle_message(event)
 
     # ------------------------------------------------------------------
-    # send
+    # edit_message / delete_message (streaming + progress-bubble support)
+    # ------------------------------------------------------------------
+
+    async def edit_message(
+        self,
+        chat_id: str,
+        message_id: str,
+        content: str,
+        *,
+        finalize: bool = False,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> SendResult:
+        """Edit a previously sent message via editMessageText.
+
+        Required for progressive answer streaming (the stream consumer
+        sends the first chunk, then re-edits the same message every
+        ``edit_interval`` as tokens arrive) and for live thinking/tool
+        progress bubbles (the gateway merges them into one editable
+        bubble).
+
+        ``finalize`` is accepted for contract compatibility with
+        ``BasePlatformAdapter.edit_message`` but is a no-op here — Bale's
+        edit API has no lifecycle state.
+        """
+        if not self._http:
+            return SendResult(success=False, error="Not connected")
+
+        msg_id = int(message_id) if str(message_id).isdigit() else message_id
+        payload: Dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": msg_id,
+            "text": content,
+        }
+        try:
+            data = await self._api_post("editMessageText", payload)
+            if data.get("ok"):
+                return SendResult(success=True, message_id=str(message_id))
+            return SendResult(
+                success=False,
+                error=str(data.get("description", "unknown error")),
+            )
+        except Exception as exc:
+            return SendResult(success=False, error=str(exc))
+
+    async def delete_message(self, chat_id: str, message_id: str) -> bool:
+        """Delete a previously sent message via deleteMessage.
+
+        Enables the gateway's progress-bubble cleanup
+        (``display.platforms.bale.cleanup_progress: true``): the live
+        thinking/tool bubbles are deleted once the final answer lands and
+        the run succeeds. Best-effort — failures return False and the
+        caller decides what to do (usually: leave the bubble in place).
+        """
+        if not self._http:
+            return False
+
+        msg_id = int(message_id) if str(message_id).isdigit() else message_id
+        payload: Dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": msg_id,
+        }
+        try:
+            data = await self._api_post("deleteMessage", payload)
+            return bool(data.get("ok"))
+        except Exception:
+            return False
+
+    # ------------------------------------------------------------------
+    # send / send_typing / send_image
     # ------------------------------------------------------------------
 
     async def send(
