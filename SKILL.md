@@ -51,10 +51,6 @@ Restart the gateway and you're done.
 - Group chat support with optional @mention gate
 - User/chat allowlisting
 - Cron delivery support
-- **Message editing + deletion** (`editMessageText` / `deleteMessage`) — enables
-  progressive streaming answers and live thinking bubbles (see the
-  `hermes-bale-messenger` skill for the `streaming` + `display.platforms.bale`
-  config keys)
 
 ## Configuration
 
