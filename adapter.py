@@ -92,6 +92,63 @@ def _guess_mime(path: str, fallback: str) -> str:
     return fallback
 
 
+# Bale's getFile returns a file_path that carries no usable extension, so an
+# incoming file's real type has to come from the message metadata
+# (document.file_name / *_mime_type). This map is the last resort when a
+# message carries a MIME type but no file name.
+_EXT_BY_MIME = {
+    "application/pdf": ".pdf",
+    "application/zip": ".zip",
+    "application/x-zip-compressed": ".zip",
+    "application/json": ".json",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/epub+zip": ".epub",
+    "application/vnd.android.package-archive": ".apk",
+    "text/plain": ".txt",
+    "text/csv": ".csv",
+    "text/html": ".html",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/bmp": ".bmp",
+    "image/heic": ".heic",
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "video/webm": ".webm",
+    "audio/ogg": ".ogg",
+    "audio/opus": ".ogg",
+    "audio/mpeg": ".mp3",
+    "audio/mp4": ".m4a",
+    "audio/x-m4a": ".m4a",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/aac": ".aac",
+    "audio/flac": ".flac",
+}
+
+
+def _ext_from_mime(mime_type: Optional[str]) -> str:
+    """Map a MIME type to a file extension (\"\" when unknown)."""
+    mime = str(mime_type or "").split(";")[0].strip().lower()
+    if not mime:
+        return ""
+    if mime in _EXT_BY_MIME:
+        return _EXT_BY_MIME[mime]
+    if mime.startswith("image/"):
+        return "." + mime.split("/", 1)[1].split("+")[0]
+    if mime.startswith("audio/"):
+        return "." + mime.split("/", 1)[1].split("+")[0]
+    if mime.startswith("video/"):
+        return "." + mime.split("/", 1)[1].split("+")[0]
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Requirement checks
 # ---------------------------------------------------------------------------
@@ -216,13 +273,15 @@ class BaleAdapter(BasePlatformAdapter):
 
         # Skip voice/audio transcription for clips longer than this (seconds).
         # Default 30s. Set BALE_MAX_VOICE_DURATION=0 to disable limit entirely.
+        # 2026-09-03: DEFAULT is 0 (no limit) — Ali's long voice clips must be
+        # transcribed; the env var remains available to re-enable a cap.
         _max_dur = extra.get("max_voice_duration")
         if _max_dur is None:
             _max_dur = _get_env("BALE_MAX_VOICE_DURATION")
         try:
-            self._max_voice_duration: int = int(_max_dur) if _max_dur and _max_dur.strip() else 30
+            self._max_voice_duration: int = int(_max_dur) if _max_dur and _max_dur.strip() else 0
         except (ValueError, TypeError):
-            self._max_voice_duration = 30
+            self._max_voice_duration = 0
 
     # ------------------------------------------------------------------
     # connect / disconnect
@@ -312,8 +371,22 @@ class BaleAdapter(BasePlatformAdapter):
         data = await self._api_get("getUpdates", params=params)
         return data.get("result", []) or []
 
-    async def _download_media(self, file_id: str) -> Optional[str]:
-        """Download a file from Bale servers via getFile and return local path."""
+    async def _download_media(
+        self,
+        file_id: str,
+        file_name: Optional[str] = None,
+        mime_type: Optional[str] = None,
+        default_ext: str = ".bin",
+    ) -> Optional[str]:
+        """Download a file from Bale servers via getFile and return local path.
+
+        The local suffix must come from the MESSAGE metadata, not from Bale's
+        ``file_path``: getFile returns an extensionless path (e.g. ``files/42``),
+        so deriving the suffix from it collapsed every incoming file to the
+        fallback — PDFs, DOCX and JPEGs were all saved as ``.ogg`` voice notes
+        (which then got transcribed and rendered twice). Resolution order:
+        file_name → mime_type → getFile path → ``default_ext``.
+        """
         import tempfile
         try:
             # Get file path from Bale
@@ -324,9 +397,16 @@ class BaleAdapter(BasePlatformAdapter):
             file_path = file_data["result"]["file_path"]
             file_url = f"{API_BASE}/file/bot{self._token}/{file_path}"
 
-            # Download to temp file (keep extension)
-            ext = os.path.splitext(file_path)[1] or ".ogg"
-            fd, local_path = tempfile.mkstemp(suffix=ext.lower())
+            # Real extension: message file_name > mime_type > remote path > fallback
+            ext = os.path.splitext(str(file_name or ""))[1].lower()
+            if not ext:
+                ext = _ext_from_mime(mime_type)
+            if not ext:
+                ext = os.path.splitext(str(file_path or ""))[1].lower()
+            if not ext or len(ext) > 6 or not ext[1:].isalnum():
+                ext = default_ext if default_ext.startswith(".") else "." + default_ext
+
+            fd, local_path = tempfile.mkstemp(suffix=ext, prefix="bale_")
             os.close(fd)
 
             async with self._http.get(file_url) as resp:
@@ -337,7 +417,10 @@ class BaleAdapter(BasePlatformAdapter):
                 with open(local_path, "wb") as f:
                     f.write(await resp.read())
 
-            logger.debug("[bale] Downloaded media to %s", local_path)
+            logger.info(
+                "[bale] Downloaded media name=%r mime=%r remote=%r -> %s",
+                file_name, mime_type, file_path, local_path,
+            )
             return local_path
         except Exception as exc:
             logger.warning("[bale] Media download error: %s", exc)
@@ -394,15 +477,23 @@ class BaleAdapter(BasePlatformAdapter):
             if photos:
                 file_id = photos[-1].get("file_id", "")
                 if file_id:
-                    local = await self._download_media(file_id)
+                    local = await self._download_media(
+                        file_id, mime_type="image/jpeg", default_ext=".jpg"
+                    )
                     if local:
                         media_urls.append(local)
                         media_types.append(_guess_mime(local, "image/jpeg"))
         elif msg.get("video"):
             mt = MessageType.VIDEO
-            file_id = msg["video"].get("file_id", "")
+            _v = msg["video"]
+            file_id = _v.get("file_id", "")
             if file_id:
-                local = await self._download_media(file_id)
+                local = await self._download_media(
+                    file_id,
+                    file_name=_v.get("file_name"),
+                    mime_type=_v.get("mime_type") or "video/mp4",
+                    default_ext=".mp4",
+                )
                 if local:
                     media_urls.append(local)
                     media_types.append(_guess_mime(local, "video/mp4"))
@@ -420,14 +511,19 @@ class BaleAdapter(BasePlatformAdapter):
             else:
                 file_id = msg["audio"].get("file_id", "")
                 if file_id:
-                    local = await self._download_media(file_id)
+                    local = await self._download_media(
+                        file_id,
+                        file_name=msg["audio"].get("file_name"),
+                        mime_type=_a_mime,
+                        default_ext=".ogg" if _voice_like else ".mp3",
+                    )
                     if local:
                         media_urls.append(local)
                         # Full MIME, not bare "audio" — run.py classifies
                         # attachments via startswith("audio/") and a bare
                         # "audio" breaks it, rendering the file twice
                         # (once as audio, once as generic document).
-                        media_types.append(_a_mime or ("audio/ogg" if _voice_like else "audio/mpeg"))
+                        media_types.append(_guess_mime(local, _a_mime or ("audio/ogg" if _voice_like else "audio/mpeg")))
         elif msg.get("voice"):
             mt = MessageType.VOICE
             duration = msg["voice"].get("duration", 0)
@@ -436,7 +532,12 @@ class BaleAdapter(BasePlatformAdapter):
             else:
                 file_id = msg["voice"].get("file_id", "")
                 if file_id:
-                    local = await self._download_media(file_id)
+                    local = await self._download_media(
+                        file_id,
+                        file_name=msg["voice"].get("file_name"),
+                        mime_type=str(msg["voice"].get("mime_type") or "audio/ogg").lower(),
+                        default_ext=".ogg",
+                    )
                     if local:
                         media_urls.append(local)
                         # Full MIME (see note above).
@@ -445,13 +546,19 @@ class BaleAdapter(BasePlatformAdapter):
                         )
         elif msg.get("document"):
             mt = MessageType.DOCUMENT
-            file_id = msg["document"].get("file_id", "")
+            _d = msg["document"]
+            file_id = _d.get("file_id", "")
             if file_id:
-                local = await self._download_media(file_id)
+                local = await self._download_media(
+                    file_id,
+                    file_name=_d.get("file_name"),
+                    mime_type=_d.get("mime_type"),
+                    default_ext=".bin",
+                )
                 if local:
                     media_urls.append(local)
                     media_types.append(
-                        str(msg["document"].get("mime_type") or "application/octet-stream").lower()
+                        str(_d.get("mime_type") or "application/octet-stream").lower()
                     )
         elif msg.get("location"):
             mt = MessageType.LOCATION
