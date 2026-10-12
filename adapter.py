@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -32,6 +33,21 @@ API_BASE = "https://tapi.bale.ai"
 MAX_MESSAGE_LENGTH = 4000
 POLL_TIMEOUT = 30
 POLL_INTERVAL = 2.0
+# A healthy long poll blocks for ~POLL_TIMEOUT seconds. A getUpdates call that
+# returns faster than this clearly did not long-poll, so the loop treats it as
+# a fast/error round trip and yields to avoid a busy loop.
+FAST_POLL_FLOOR = 1.0
+
+
+class BaleApiError(RuntimeError):
+    """Bale answered with an HTTP error status or an ``ok: false`` body.
+
+    Bale reports a bad token / bad offset / server fault as a *fast* JSON
+    error (HTTP 401/404/500, or HTTP 200 with ``ok: false``) instead of a
+    network failure. Surfacing those as exceptions — rather than returning the
+    body as a normal, empty result — keeps callers (and the poll loop) from
+    mistaking an error for "no updates".
+    """
 
 
 def _get_env(key: str, default: str = "") -> str:
@@ -309,6 +325,17 @@ class BaleAdapter(BasePlatformAdapter):
             data = await self._api_get("getMe")
             self._bot_id = str(data.get("result", {}).get("id", ""))
             self._bot_username = data.get("result", {}).get("username", "")
+            if not self._bot_id:
+                # HTTP 200 with no bot id: refuse to start. A wrong token /
+                # wrong user number must fail loudly here, never start a poll
+                # loop that will error on every request.
+                logger.error(
+                    "[bale] getMe returned no bot id — check BALE_BOT_TOKEN "
+                    "(wrong token or user number?)"
+                )
+                await self._http.close()
+                self._http = None
+                return False
             logger.info("[bale] Connected as @%s (id=%s)", self._bot_username, self._bot_id)
         except Exception as exc:
             logger.error("[bale] getMe failed: %s", exc)
@@ -356,9 +383,16 @@ class BaleAdapter(BasePlatformAdapter):
         """Long-poll for updates from Bale."""
         while self._running:
             try:
+                started = time.monotonic()
                 updates = await self._get_updates()
                 for upd in updates:
                     await self._handle_update(upd)
+                # Safety net against a 100%-CPU busy loop: a healthy long poll
+                # blocks for ~POLL_TIMEOUT, so a sub-second round trip means the
+                # server answered instantly (e.g. it returned an error the old
+                # code read as "no updates"). Yield before polling again.
+                if not updates and (time.monotonic() - started) < FAST_POLL_FLOOR:
+                    await asyncio.sleep(POLL_INTERVAL)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -755,15 +789,48 @@ class BaleAdapter(BasePlatformAdapter):
     # Internal HTTP helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _raise_for_api_error(method: str, status: int, data: Any) -> None:
+        """Raise BaleApiError for an HTTP error status or an ``ok: false`` body.
+
+        Bale returns a bad token / bad offset / server fault as a *fast* JSON
+        error rather than a network failure. Treating that as a normal result
+        let callers — and crucially the poll loop — read it as "no updates" and
+        retry with no delay, spinning a CPU core. Any non-JSON error body (e.g.
+        a 413 HTML page) also lands here via the HTTP status.
+        """
+        if status and status >= 400:
+            desc = data.get("description") if isinstance(data, dict) else None
+            raise BaleApiError(
+                f"Bale API {method} failed: HTTP {status}" + (f" {desc}" if desc else "")
+            )
+        if data is None:
+            raise BaleApiError(f"Bale API {method} failed: non-JSON response body")
+        if isinstance(data, dict) and data.get("ok") is False:
+            desc = data.get("description") or data.get("error_code") or "unknown error"
+            raise BaleApiError(f"Bale API {method} failed: {desc}")
+
     async def _api_get(self, method: str, params: dict = None) -> dict:
         url = _api_url(self._token, method)
         async with self._http.get(url, params=params) as resp:
-            return await resp.json()
+            status = resp.status
+            try:
+                data = await resp.json()
+            except Exception:
+                data = None
+        self._raise_for_api_error(method, status, data)
+        return data or {}
 
     async def _api_post(self, method: str, data: dict) -> dict:
         url = _api_url(self._token, method)
         async with self._http.post(url, json=data) as resp:
-            return await resp.json()
+            status = resp.status
+            try:
+                body = await resp.json()
+            except Exception:
+                body = None
+        self._raise_for_api_error(method, status, body)
+        return body or {}
 
     async def _api_post_multipart(
         self,
@@ -783,7 +850,13 @@ class BaleAdapter(BasePlatformAdapter):
                 filename=os.path.basename(file_path),
             )
         async with self._http.post(url, data=form) as resp:
-            return await resp.json()
+            status = resp.status
+            try:
+                body = await resp.json()
+            except Exception:
+                body = None
+        self._raise_for_api_error(method, status, body)
+        return body or {}
 
     async def send_document(
         self,
