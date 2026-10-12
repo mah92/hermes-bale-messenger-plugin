@@ -443,17 +443,28 @@ class BaleAdapter(BasePlatformAdapter):
             fd, local_path = tempfile.mkstemp(suffix=ext, prefix="bale_")
             os.close(fd)
 
-            async with self._http.get(file_url) as resp:
-                if resp.status != 200:
-                    logger.warning("[bale] Download failed: HTTP %s", resp.status)
-                    os.unlink(local_path)
-                    return None
-                with open(local_path, "wb") as f:
-                    f.write(await resp.read())
+            # Dedicated session: the shared session's total=30s timeout aborts
+            # any large attachment mid-read (empty asyncio.TimeoutError, which
+            # the caller logged as a blank "Media download error"). Big videos
+            # legitimately need minutes, so stream them with a long cap.
+            import aiohttp
+            dl_timeout = aiohttp.ClientTimeout(total=None, sock_connect=30.0, sock_read=120.0)
+            written = 0
+            async with aiohttp.ClientSession(timeout=dl_timeout, trust_env=True) as sess:
+                async with sess.get(file_url) as resp:
+                    if resp.status != 200:
+                        logger.warning("[bale] Download failed: HTTP %s", resp.status)
+                        os.unlink(local_path)
+                        return None
+                    # Do NOT do resp.read() — read in chunks so nothing buffers whole
+                    with open(local_path, "wb") as f:
+                        async for chunk in resp.content.iter_chunked(1 << 20):
+                            f.write(chunk)
+                            written += len(chunk)
 
             logger.info(
-                "[bale] Downloaded media name=%r mime=%r remote=%r -> %s",
-                file_name, mime_type, file_path, local_path,
+                "[bale] Downloaded media name=%r mime=%r remote=%r (%d bytes) -> %s",
+                file_name, mime_type, file_path, written, local_path,
             )
             return local_path
         except Exception as exc:
@@ -720,15 +731,20 @@ class BaleAdapter(BasePlatformAdapter):
                     img_data = await resp.read()
                     fd, tmp = tempfile.mkstemp(suffix=".jpg")
                     os.close(fd)
-                    with open(tmp, "wb") as f:
-                        f.write(img_data)
+                    # try/finally: _api_post_multipart now RAISES on an HTTP
+                    # error, which would otherwise skip the unlink and leak the
+                    # temp file.
+                    try:
+                        with open(tmp, "wb") as f:
+                            f.write(img_data)
 
-                    mp_data = {"chat_id": chat_id}
-                    if caption:
-                        mp_data["caption"] = caption
-                    result = await self._api_post_multipart("sendPhoto",
-                        mp_data, {"photo": tmp})
-                    os.unlink(tmp)
+                        mp_data = {"chat_id": chat_id}
+                        if caption:
+                            mp_data["caption"] = caption
+                        result = await self._api_post_multipart("sendPhoto",
+                            mp_data, {"photo": tmp})
+                    finally:
+                        os.unlink(tmp)
                     if result.get("ok"):
                         sent_msg_id = str(result.get("result", {}).get("message_id", ""))
                         return SendResult(success=True, message_id=sent_msg_id)

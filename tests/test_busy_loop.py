@@ -180,12 +180,46 @@ async def test_failed_send(mod):
     await runner.cleanup()
 
 
+async def test_image_tempfile_no_leak(mod):
+    print("\n5) send_image upload failure must not leak the temp .jpg")
+    import glob
+
+    async def h_image(request):
+        return web.Response(body=b"\xff\xd8\xff\xe0FAKEJPEG", content_type="image/jpeg")
+
+    async def h_sendphoto(request):
+        return web.json_response(
+            {"ok": False, "error_code": 500, "description": "boom"}, status=500
+        )
+
+    async def h_sendmessage(request):
+        return web.json_response({"ok": True, "result": {"message_id": 9}})
+
+    runner, port = await start([
+        ("GET", "/img.jpg", h_image),
+        ("POST", "/bottok/sendPhoto", h_sendphoto),
+        ("POST", "/bottok/sendMessage", h_sendmessage),
+    ])
+    mod.API_BASE = f"http://127.0.0.1:{port}"
+    import aiohttp
+
+    a = make_adapter(mod, "tok")
+    a._http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30.0))
+    before = set(glob.glob("/tmp/tmp*.jpg"))
+    await a.send_image(chat_id="1", image_url=f"http://127.0.0.1:{port}/img.jpg", caption="c")
+    leaked = set(glob.glob("/tmp/tmp*.jpg")) - before
+    check("no temp .jpg leaked", not leaked, f"(leaked={leaked})")
+    await a._http.close()
+    await runner.cleanup()
+
+
 async def main():
     mod = load_adapter()
     await test_busy_loop(mod)
     await test_wrong_token_connect(mod)
     await test_healthy_poll(mod)
     await test_failed_send(mod)
+    await test_image_tempfile_no_leak(mod)
     print(f"\n=== {len(PASS)} passed, {len(FAIL)} failed ===")
     if FAIL:
         print("FAILED:", FAIL)
